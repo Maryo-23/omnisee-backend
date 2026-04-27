@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DB_FILE = path.join(__dirname, 'db.json');
+const HOST = process.env.HOST || 'https://omnisee-backend.onrender.com';
 
 let db = { users: [], posts: [] };
 if (fs.existsSync(DB_FILE)) {
@@ -18,69 +19,114 @@ function saveDb() {
 }
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ type: ['application/json', 'application/activity+json'] }));
 
-app.post('/api/register', (req, res) => {
-  const { email, password, username, displayName } = req.body;
+// ActivityPub JSON helper
+function ap(res, data) {
+  res.set('Content-Type', 'application/activity+json');
+  res.json(data);
+}
+
+function getActorUrl(username) {
+  return `${HOST}/ap/users/${username}`;
+}
+
+function getOutboxUrl(username) {
+  return `${HOST}/ap/users/${username}/outbox`;
+}
+
+function getInboxUrl(username) {
+  return `${HOST}/ap/users/${username}/inbox`;
+}
+
+// WebFinger endpoint
+app.get('/.well-known/webfinger', (req, res) => {
+  const resource = req.query.resource;
+  if (!resource || !resource.startsWith('acct:')) return res.status(400).json({ error: 'Invalid resource' });
   
-  if (db.users.find(u => u.email === email)) {
-    return res.status(400).json({ error: 'Email already exists' });
-  }
-  if (db.users.find(u => u.username === username)) {
-    return res.status(400).json({ error: 'Username already exists' });
-  }
+  const username = resource.replace('acct:', '').split('@')[0];
+  const user = db.users.find(u => u.username === username);
   
-  const id = crypto.randomUUID();
-  const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
+  if (!user) return res.status(404).json({ error: 'User not found' });
   
-  const user = { id, email, username, displayName: displayName || username, bio: '', avatar_url: '', password_hash: passwordHash, created_at: new Date().toISOString() };
-  db.users.push(user);
-  saveDb();
-  
-  res.json({ success: true, user: { id, email, username, displayName: user.displayName } });
+  res.json({
+    subject: `acct:${username}@${new URL(HOST).hostname}`,
+    links: [
+      {
+        rel: 'self',
+        type: 'application/activity+json',
+        href: getActorUrl(username)
+      }
+    ]
+  });
 });
 
-app.post('/api/login', (req, res) => {
-  const { email, password } = req.body;
-  const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
-  const user = db.users.find(u => u.email === email && u.password_hash === passwordHash);
-  
-  if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-  res.json({ success: true, user });
-});
-
-app.get('/api/posts', (req, res) => {
-  const posts = db.posts.map(p => {
-    const user = db.users.find(u => u.id === p.user_id);
-    return { ...p, username: user?.username, displayName: user?.display_name, avatarUrl: user?.avatar_url };
-  }).reverse();
-  res.json(posts);
-});
-
-app.post('/api/posts', (req, res) => {
-  const { userId, mediaUrl, mediaType, caption } = req.body;
-  const id = crypto.randomUUID();
-  const post = { id, user_id: userId, media_url: mediaUrl, media_type: mediaType, caption, likes_count: 0, comments_count: 0, created_at: new Date().toISOString() };
-  db.posts.push(post);
-  saveDb();
-  res.json({ success: true, id });
-});
-
-app.post('/api/posts/:id/like', (req, res) => {
-  const { userId } = req.body;
-  const post = db.posts.find(p => p.id === req.params.id);
-  if (!post) return res.status(404).json({ error: 'Not found' });
-  post.likes_count = (post.likes_count || 0) + 1;
-  saveDb();
-  res.json({ success: true });
-});
-
-app.get('/api/users/:id', (req, res) => {
-  const user = db.users.find(u => u.id === req.params.id);
+// Actor endpoint
+app.get('/ap/users/:username', (req, res) => {
+  const user = db.users.find(u => u.username === req.params.username);
   if (!user) return res.status(404).json({ error: 'Not found' });
-  res.json(user);
+  
+  ap(res, {
+    '@context': [
+      'https://www.w3.org/ns/activitystreams',
+      'https://w3id.org/security/v1'
+    ],
+    id: getActorUrl(user.username),
+    type: 'Person',
+    preferredUsername: user.username,
+    name: user.displayName || user.username,
+    summary: user.bio || '',
+    icon: user.avatar_url ? [{ type: 'Image', url: user.avatar_url }] : [],
+    url: `${HOST}/ap/users/${user.username}`,
+    outbox: getOutboxUrl(user.username),
+    inbox: getInboxUrl(user.username),
+    followers: `${HOST}/ap/users/${user.username}/followers`,
+    following: `${HOST}/ap/users/${user.username}/following`,
+    publicKey: {
+      id: `${getActorUrl(user.username)}#main-key`,
+      owner: getActorUrl(user.username),
+      publicKeyPem: user.publicKeyPem || '-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0Z3VS5JJcds3xfn/ygWyF8L2U8V0Q0pA0L3P1vBkKJB6L8zNnBkg8pBk7KPBfP/ygWyF8L2U8V0Q0pA0\n-----END PUBLIC KEY-----\n'
+    },
+    endpoints: {
+      sharedInbox: `${HOST}/ap/inbox`
+    },
+    published: user.created_at
+  });
 });
 
-app.listen(PORT, () => {
-  console.log(`OmniSee API running on port ${PORT}`);
+// Outbox endpoint
+app.get('/ap/users/:username/outbox', (req, res) => {
+  const user = db.users.find(u => u.username === req.params.username);
+  if (!user) return res.status(404).json({ error: 'Not found' });
+  
+  const userPosts = db.posts.filter(p => p.user_id === user.id).map(p => ({
+    id: `${HOST}/ap/posts/${p.id}`,
+    type: 'Create',
+    actor: getActorUrl(user.username),
+    object: {
+      id: `${HOST}/ap/posts/${p.id}`,
+      type: 'Note',
+      content: p.caption || '',
+      attributedTo: getActorUrl(user.username),
+      published: p.created_at,
+      url: `${HOST}/ap/posts/${p.id}`
+    },
+    published: p.created_at
+  })).reverse();
+  
+  ap(res, {
+    '@context': 'https://www.w3.org/ns/activitystreams',
+    id: getOutboxUrl(user.username),
+    type: 'OrderedCollection',
+    totalItems: userPosts.length,
+    orderedItems: userPosts
+  });
 });
+
+// Inbox endpoint
+app.post('/ap/users/:username/inbox', (req, res) => {
+  const user = db.users.find(u => u.username === req.params.username);
+  if (!user) return res.status(404).json({ error: 'Not found' });
+  
+  console.log('Received Activity:', req.body.type);
+  res.status(202).json({ ok: true 
