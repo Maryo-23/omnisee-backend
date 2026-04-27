@@ -176,6 +176,10 @@ app.post('/api/register', (req, res) => {
   res.json({ success: true, user: { id, email, username, displayName: user.displayName } });
 });
 
+app.get('/debug', (req, res) => {
+  res.json({ users: db.users.map(u => ({ email: u.email, hash: u.password_hash })) });
+});
+
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
   console.log('Login attempt:', email);
