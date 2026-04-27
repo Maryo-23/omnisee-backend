@@ -222,6 +222,20 @@ app.post('/api/users/change-password', (req, res) => {
   res.json({ success: true });
 });
 
+app.post('/api/users/update-profile', (req, res) => {
+  const { userId, displayName, bio, avatarUrl } = req.body;
+  const user = db.users.find(u => u.id === userId);
+  
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  
+  if (displayName) user.display_name = displayName;
+  if (bio !== undefined) user.bio = bio;
+  if (avatarUrl !== undefined) user.avatar_url = avatarUrl;
+  
+  saveDb();
+  res.json({ success: true, user });
+});
+
 app.listen(PORT, () => {
   console.log(`OmniSee API running on port ${PORT}`);
 });
