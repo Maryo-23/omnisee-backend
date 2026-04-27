@@ -178,8 +178,12 @@ app.post('/api/register', (req, res) => {
 
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
+  console.log('Login attempt:', email);
+  console.log('DB users:', db.users.map(u => u.email));
   const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
+  console.log('Hash:', passwordHash);
   const user = db.users.find(u => u.email === email && u.password_hash === passwordHash);
+  console.log('Found user:', user);
   
   if (!user) return res.status(401).json({ error: 'Invalid credentials' });
   res.json({ success: true, user });
