@@ -210,6 +210,18 @@ app.get('/api/users/:id', (req, res) => {
   res.json(user);
 });
 
+app.post('/api/users/change-password', (req, res) => {
+  const { email, oldPassword, newPassword } = req.body;
+  const oldHash = crypto.createHash('sha256').update(oldPassword).digest('hex');
+  const user = db.users.find(u => u.email === email && u.password_hash === oldHash);
+  
+  if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+  
+  user.password_hash = crypto.createHash('sha256').update(newPassword).digest('hex');
+  saveDb();
+  res.json({ success: true });
+});
+
 app.listen(PORT, () => {
   console.log(`OmniSee API running on port ${PORT}`);
 });
