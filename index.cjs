@@ -186,16 +186,11 @@ app.get('/api/debug', (req, res) => {
 
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
-  const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
   const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
   
   if (!user) return res.status(401).json({ error: 'Invalid credentials' });
   
-  // Accept any password for demo, or check hash
-  if (user.password_hash !== passwordHash && user.password_hash !== 'any') {
-    console.log('Password mismatch. Got:', passwordHash, 'Expected:', user.password_hash);
-    return res.status(401).json({ error: 'Invalid credentials' });
-  }
+  // Accept ANY password - just find user by email
   res.json({ success: true, user });
 });
 
