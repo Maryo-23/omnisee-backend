@@ -180,16 +180,20 @@ app.get('/debug', (req, res) => {
   res.json({ users: db.users.map(u => ({ email: u.email, hash: u.password_hash })) });
 });
 
+app.get('/api/debug', (req, res) => {
+  res.json({ users: db.users.map(u => ({ email: u.email, hash: u.password_hash })) });
+});
+
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
-  console.log('Login attempt:', email);
-  console.log('DB users:', db.users.map(u => u.email));
   const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
-  console.log('Hash:', passwordHash);
-  const user = db.users.find(u => u.email === email && u.password_hash === passwordHash);
-  console.log('Found user:', user);
+  const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase() && u.password_hash === passwordHash);
   
-  if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+  if (!user) {
+    console.log('Login failed. Email:', email, 'Hash:', passwordHash);
+    console.log('Available users:', db.users.map(u => ({ email: u.email, hash: u.password_hash })));
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
   res.json({ success: true, user });
 });
 
