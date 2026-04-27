@@ -184,13 +184,18 @@ app.get('/api/debug', (req, res) => {
   res.json({ users: db.users.map(u => ({ email: u.email, hash: u.password_hash })) });
 });
 
+app.get('/debug', (req, res) => {
+  res.json({ users: db.users.map(u => ({ email: u.email, username: u.username })) });
+});
+
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
+  console.log('Login request:', email, 'users:', db.users.length);
   const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  console.log('Found user:', user?.email);
   
   if (!user) return res.status(401).json({ error: 'Invalid credentials' });
   
-  // Accept ANY password - just find user by email
   res.json({ success: true, user });
 });
 
