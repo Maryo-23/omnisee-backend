@@ -9,9 +9,16 @@ const PORT = process.env.PORT || 3000;
 const DB_FILE = path.join(__dirname, 'db.json');
 const HOST = process.env.HOST || 'https://omnisee-backend.onrender.com';
 
-let db = { users: [], posts: [] };
+const DEMO_USERS = [
+  { id: 'demo1', email: 'demo@demo.com', username: 'demo', display_name: 'Demo User', password_hash: 'ecd71870d1963316a97e3ac3408c9835ad8cf0f3c1bc703527c30265534f75ae', bio: 'Hello!', avatar_url: '', created_at: '2026-01-01' },
+  { id: 'demo2', email: 'AndrewwerdnA7@protonmail.com', username: 'maryo23', display_name: 'maryo23', password_hash: 'a9fc8dc21063c33712ae47cd4d8d31bba4bb7c99949a198116e03efa045bc0dd', bio: '', avatar_url: '', created_at: '2026-01-01' }
+];
+
+let db = { users: [...DEMO_USERS], posts: [] };
+
 if (fs.existsSync(DB_FILE)) {
-  db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+  const saved = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+  if (saved.users?.length > 0) db = saved;
 }
 
 function saveDb() {
