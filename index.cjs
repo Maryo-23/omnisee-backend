@@ -12,43 +12,7 @@ const db = new Database(path.join(__dirname, 'omnisee.db'));
 app.use(cors());
 app.use(express.json());
 
-// Create tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    username TEXT UNIQUE NOT NULL,
-    email TEXT UNIQUE NOT NULL,
-    display_name TEXT NOT NULL,
-    bio TEXT DEFAULT '',
-    avatar_url TEXT DEFAULT '',
-    password_hash TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  
-  CREATE TABLE IF NOT EXISTS posts (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    media_url TEXT NOT NULL,
-    media_type TEXT NOT NULL,
-    caption TEXT DEFAULT '',
-    likes_count INTEGER DEFAULT 0,
-    comments_count INTEGER DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id)
-  );
-  
-  CREATE TABLE IF NOT EXISTS likes (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    post_id TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id),
-    FOREIGN KEY (post_id) REFERENCES posts(id)
-  );
-`);
-
-// Auth
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/register', (req, res) => {
   const { email, password, username, displayName } = req.body;
   const id = crypto.randomUUID();
   const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
@@ -62,7 +26,7 @@ app.post('/api/auth/register', (req, res) => {
   }
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
   const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
   const user = db.prepare('SELECT * FROM users WHERE email = ? AND password_hash = ?').get(email, passwordHash);
