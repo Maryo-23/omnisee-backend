@@ -10,8 +10,8 @@ const DB_FILE = path.join(__dirname, 'db.json');
 const HOST = process.env.HOST || 'https://omnisee-backend.onrender.com';
 
 const DEMO_USERS = [
-  { id: 'demo1', email: 'demo@demo.com', username: 'demo', display_name: 'Demo User', password_hash: 'any', bio: 'Hello!', avatar_url: '', created_at: '2026-01-01' },
-  { id: 'demo2', email: 'AndrewwerdnA7@protonmail.com', username: 'maryo23', display_name: 'maryo23', password_hash: 'any', bio: '', avatar_url: '', created_at: '2026-01-01' }
+  { id: 'demo1', email: 'demo@demo.com', username: 'demo', display_name: 'Demo User', password_hash: 'any', bio: 'Hello!', avatar_url: '', created_at: '2026-01-01', customDomain: '' },
+  { id: 'demo2', email: 'AndrewwerdnA7@protonmail.com', username: 'maryo23', display_name: 'maryo23', password_hash: 'any', bio: '', avatar_url: '', created_at: '2026-01-01', customDomain: '' }
 ];
 
 let db = { users: [...DEMO_USERS], posts: [] };
@@ -258,7 +258,7 @@ app.post('/api/users/change-password', (req, res) => {
 });
 
 app.post('/api/users/update-profile', (req, res) => {
-  const { userId, displayName, bio, avatarUrl } = req.body;
+  const { userId, displayName, bio, avatarUrl, customDomain } = req.body;
   const user = db.users.find(u => u.id === userId);
   
   if (!user) return res.status(404).json({ error: 'User not found' });
@@ -266,9 +266,49 @@ app.post('/api/users/update-profile', (req, res) => {
   if (displayName) user.display_name = displayName;
   if (bio !== undefined) user.bio = bio;
   if (avatarUrl !== undefined) user.avatar_url = avatarUrl;
+  if (customDomain !== undefined) {
+    const cleanDomain = customDomain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    user.customDomain = cleanDomain;
+  }
   
   saveDb();
   res.json({ success: true, user });
+});
+
+app.get('/.well-known/host-meta', (req, res) => {
+  res.set('Content-Type', 'application/xml');
+  res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<XRD xmlns="http://docs.oasis-open.org/ns/xri/xsd-">
+  <Link rel="lrdd" type="application/xrd+xml" template="https://omnisee-backend.onrender.com/.well-known/webfinger?resource={uri}"/>
+</XRD>`);
+});
+
+app.get('/.well-known/webfinger', (req, res) => {
+  const resource = req.query.resource;
+  if (!resource) return res.status(400).json({ error: 'Missing resource' });
+  
+  let handle = resource.replace('acct:', '');
+  let domain = 'omnisee.app';
+  
+  if (handle.includes('@')) {
+    const parts = handle.split('@');
+    handle = parts[0];
+    domain = parts[1];
+  }
+  
+  const user = db.users.find(u => u.username === handle);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  
+  const userDomain = user.customDomain || domain;
+  
+  res.json({
+    subject: `acct:${handle}@${userDomain}`,
+    links: [{
+      rel: 'self',
+      type: 'application/activity+json',
+      href: `https://omnisee-backend.onrender.com/ap/users/${handle}`
+    }]
+  });
 });
 
 app.listen(PORT, () => {
