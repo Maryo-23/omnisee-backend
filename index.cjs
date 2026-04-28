@@ -242,6 +242,14 @@ app.post('/api/posts', upload.single('file'), (req, res) => {
   res.json({ success: true, id, mediaUrl });
 });
 
+app.delete('/api/posts/:id', (req, res) => {
+  const postIndex = db.posts.findIndex(p => p.id === req.params.id);
+  if (postIndex === -1) return res.status(404).json({ error: 'Not found' });
+  const deleted = db.posts.splice(postIndex, 1)[0];
+  saveDb();
+  res.json({ success: true, deleted });
+});
+
 app.post('/api/posts/:id/like', (req, res) => {
   const { userId } = req.body;
   const post = db.posts.find(p => p.id === req.params.id);
