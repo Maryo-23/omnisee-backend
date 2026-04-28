@@ -3,11 +3,21 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const multer = require('multer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DB_FILE = path.join(__dirname, 'db.json');
 const HOST = process.env.HOST || 'https://omnisee-backend.onrender.com';
+const UPLOAD_DIR = path.join(__dirname, 'uploads');
+
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+  filename: (req, file, cb) => cb(null, `${Date.now()}-${crypto.randomUUID()}${path.extname(file.originalname)}`)
+});
+const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
 
 const DEMO_USERS = [
   { id: 'demo1', email: 'demo@demo.com', username: 'demo', display_name: 'Demo User', password_hash: 'any', bio: 'Hello!', avatar_url: '', created_at: '2026-01-01', customDomain: '' },
@@ -27,6 +37,7 @@ function saveDb() {
 
 app.use(cors());
 app.use(express.json({ type: ['application/json', 'application/activity+json'] }));
+app.use('/uploads', express.static(UPLOAD_DIR));
 
 function ap(res, data) {
   res.set('Content-Type', 'application/activity+json');
@@ -221,13 +232,14 @@ app.get('/api/posts', (req, res) => {
   res.json(posts);
 });
 
-app.post('/api/posts', (req, res) => {
-  const { userId, mediaUrl, mediaType, caption } = req.body;
+app.post('/api/posts', upload.single('file'), (req, res) => {
+  const { userId, caption, mediaType } = req.body;
   const id = crypto.randomUUID();
-  const post = { id, user_id: userId, media_url: mediaUrl, media_type: mediaType, caption, likes_count: 0, comments_count: 0, created_at: new Date().toISOString() };
+  const mediaUrl = req.file ? `${HOST}/uploads/${req.file.filename}` : null;
+  const post = { id, user_id: userId, media_url: mediaUrl, media_type: mediaType || (req.file?.mimetype.startsWith('video/') ? 'video' : 'photo'), caption, likes_count: 0, comments_count: 0, created_at: new Date().toISOString() };
   db.posts.push(post);
   saveDb();
-  res.json({ success: true, id });
+  res.json({ success: true, id, mediaUrl });
 });
 
 app.post('/api/posts/:id/like', (req, res) => {
