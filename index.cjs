@@ -192,13 +192,18 @@ app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
   console.log('Login request:', email, 'users:', db.users.length);
   
-  // Fallback users if db is empty
-  if (db.users.length === 0) {
-    db.users.push(
-      { id: 'demo', email: 'test@test.com', username: 'test', display_name: 'Test', password_hash: 'any', bio: '', avatar_url: '', created_at: '2026-01-01' },
-      { id: 'maryo', email: 'AndrewwerdnA7@protonmail.com', username: 'maryo23', display_name: 'maryo23', password_hash: 'any', bio: '', avatar_url: '', created_at: '2026-01-01' }
-    );
-  }
+  // Always ensure fallback users exist
+  const fallbackUsers = [
+    { id: 'demo', email: 'test@test.com', username: 'test', display_name: 'Test', password_hash: 'any', bio: '', avatar_url: '', created_at: '2026-01-01' },
+    { id: 'maryo', email: 'AndrewwerdnA7@protonmail.com', username: 'maryo23', display_name: 'maryo23', password_hash: 'any', bio: '', avatar_url: '', created_at: '2026-01-01' }
+  ];
+  
+  // Add fallback users if they don't exist
+  fallbackUsers.forEach(fu => {
+    if (!db.users.find(u => u.email.toLowerCase() === fu.email.toLowerCase())) {
+      db.users.push(fu);
+    }
+  });
   
   const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
   console.log('Found user:', user?.email);
