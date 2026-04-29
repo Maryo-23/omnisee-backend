@@ -246,12 +246,15 @@ app.get('/api/posts', (req, res) => {
 
 app.post('/api/posts', upload.single('file'), (req, res) => {
   const { userId, caption, mediaType } = req.body;
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+
   const id = crypto.randomUUID();
-  const mediaUrl = req.file ? `${HOST}/uploads/${req.file.filename}` : null;
-  const post = { id, user_id: userId, media_url: mediaUrl, media_type: mediaType || (req.file?.mimetype.startsWith('video/') ? 'video' : 'photo'), caption, likes_count: 0, comments_count: 0, created_at: new Date().toISOString() };
+  const mediaUrl = `${HOST}/uploads/${req.file.filename}`;
+  const post = { id, user_id: userId, media_url: mediaUrl, media_type: mediaType || (req.file.mimetype.startsWith('video/') ? 'video' : 'photo'), caption, likes_count: 0, comments_count: 0, created_at: new Date().toISOString() };
   db.posts.push(post);
   saveDb();
-  res.json({ success: true, id, mediaUrl });
+  res.json({ success: true, post });
 });
 
 app.delete('/api/posts/:id', (req, res) => {
