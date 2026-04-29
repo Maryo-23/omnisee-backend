@@ -21,14 +21,15 @@ const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
 
 const DEMO_USERS = [
   { id: 'demo1', email: 'demo@demo.com', username: 'demo', display_name: 'Demo User', password_hash: 'any', bio: 'Hello!', avatar_url: '', created_at: '2026-01-01', customDomain: '' },
-  { id: 'demo2', email: 'AndrewwerdnA7@protonmail.com', username: 'maryo23', display_name: 'maryo23', password_hash: 'any', bio: '', avatar_url: '', created_at: '2026-01-01', customDomain: '' }
+  { id: 'demo2', email: 'AndrewwerdnA7@protonmail.com', username: 'Maryo23', display_name: 'Maryo23', password_hash: 'any', bio: '', avatar_url: '', created_at: '2026-01-01', customDomain: '' }
 ];
 
-let db = { users: [...DEMO_USERS], posts: [] };
+let db = { users: [...DEMO_USERS], posts: [], comments: [] };
 
 if (fs.existsSync(DB_FILE)) {
   const saved = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
   if (saved.users?.length > 0) db = saved;
+  if (!db.comments) db.comments = [];
 }
 
 function saveDb() {
@@ -173,8 +174,16 @@ app.post('/api/register', (req, res) => {
   if (db.users.find(u => u.email === email)) {
     return res.status(400).json({ error: 'Email already exists' });
   }
-  if (db.users.find(u => u.username === username)) {
+  if (db.users.find(u => u.username.toLowerCase() === username.toLowerCase())) {
     return res.status(400).json({ error: 'Username already exists' });
+  }
+
+  // Reserve all case variants of Maryo23 for the owner only
+  if (username.toLowerCase() === 'maryo23') {
+    const ownerEmail = 'AndrewwerdnA7@protonmail.com';
+    if (email.toLowerCase() !== ownerEmail.toLowerCase()) {
+      return res.status(403).json({ error: 'Username reserved' });
+    }
   }
   
   const id = crypto.randomUUID();
@@ -206,15 +215,18 @@ app.post('/api/login', (req, res) => {
   // Always ensure fallback users exist
   const fallbackUsers = [
     { id: 'demo', email: 'test@test.com', username: 'test', display_name: 'Test', password_hash: 'any', bio: '', avatar_url: '', created_at: '2026-01-01' },
-    { id: 'maryo', email: 'AndrewwerdnA7@protonmail.com', username: 'maryo23', display_name: 'maryo23', password_hash: 'any', bio: '', avatar_url: '', created_at: '2026-01-01' }
+    { id: 'maryo', email: 'AndrewwerdnA7@protonmail.com', username: 'Maryo23', display_name: 'Maryo23', password_hash: 'any', bio: '', avatar_url: '', created_at: '2026-01-01' }
   ];
   
   // Add fallback users if they don't exist
+  let added = false;
   fallbackUsers.forEach(fu => {
     if (!db.users.find(u => u.email.toLowerCase() === fu.email.toLowerCase())) {
       db.users.push(fu);
+      added = true;
     }
   });
+  if (added) saveDb();
   
   const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
   console.log('Found user:', user?.email);
@@ -265,6 +277,38 @@ app.get('/api/users/:id', (req, res) => {
   res.json(user);
 });
 
+app.get('/api/users/by-username/:username', (req, res) => {
+  const user = db.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
+  if (!user) return res.status(404).json({ error: 'Not found' });
+  res.json(user);
+});
+
+app.get('/api/posts/:id/comments', (req, res) => {
+  const comments = db.comments.filter(c => c.post_id === req.params.id).map(c => {
+    const user = db.users.find(u => u.id === c.user_id);
+    return { ...c, username: user?.username, displayName: user?.display_name, avatarUrl: user?.avatar_url };
+  });
+  res.json(comments);
+});
+
+app.post('/api/posts/:id/comments', (req, res) => {
+  const { userId, text } = req.body;
+  const post = db.posts.find(p => p.id === req.params.id);
+  if (!post) return res.status(404).json({ error: 'Not found' });
+  const comment = {
+    id: crypto.randomUUID(),
+    post_id: req.params.id,
+    user_id: userId,
+    text,
+    likes_count: 0,
+    created_at: new Date().toISOString()
+  };
+  db.comments.push(comment);
+  post.comments_count = (post.comments_count || 0) + 1;
+  saveDb();
+  res.json({ success: true, comment });
+});
+
 app.post('/api/users/change-password', (req, res) => {
   const { email, oldPassword, newPassword } = req.body;
   const oldHash = crypto.createHash('sha256').update(oldPassword).digest('hex');
@@ -283,7 +327,7 @@ app.post('/api/users/update-profile', (req, res) => {
   
   if (!user) return res.status(404).json({ error: 'User not found' });
   
-  if (displayName) user.display_name = displayName;
+  if (displayName !== undefined) user.display_name = displayName;
   if (bio !== undefined) user.bio = bio;
   if (avatarUrl !== undefined) user.avatar_url = avatarUrl;
   if (customDomain !== undefined) {

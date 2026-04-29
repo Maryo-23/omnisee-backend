@@ -1,1 +1,26 @@
-{"users":[{"id":"test123","email":"test@test.com","username":"testuser","display_name":"Test User","bio":"","avatar_url":"","password_hash":"ecd71870d1963316a97e3ac3408c9835ad8cf0f3c1bc703527c30265534f75ae","created_at":"2026-01-01T00:00:00.000Z"}],"posts":[]}
+{
+  "users": [
+    {
+      "id": "test123",
+      "email": "test@test.com",
+      "username": "testuser",
+      "display_name": "Test User",
+      "bio": "",
+      "avatar_url": "",
+      "password_hash": "ecd71870d1963316a97e3ac3408c9835ad8cf0f3c1bc703527c30265534f75ae",
+      "created_at": "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  "posts": [
+    {
+      "id": "f9972821-f6e6-4c71-8a7e-093f9b37eb4f",
+      "user_id": "test",
+      "media_url": "https://omnisee-backend.onrender.com/uploads/1777350458487-5f48323e-0335-414f-9541-bf9cce26d5f1.json",
+      "media_type": "photo",
+      "caption": "test",
+      "likes_count": 0,
+      "comments_count": 0,
+      "created_at": "2026-04-28T04:27:38.493Z"
+    }
+  ]
+}
