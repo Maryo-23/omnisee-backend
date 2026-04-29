@@ -38,7 +38,7 @@ function saveDb() {
 
 app.use(cors());
 app.use(express.json({ type: ['application/json', 'application/activity+json'] }));
-app.use('/uploads', express.static(UPLOAD_DIR));
+app.use('/uploads', cors(), express.static(UPLOAD_DIR));
 
 function ap(res, data) {
   res.set('Content-Type', 'application/activity+json');
