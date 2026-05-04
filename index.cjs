@@ -4,10 +4,10 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
+const Database = require('better-sqlite3');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const DB_FILE = path.join(__dirname, 'db.json');
 const HOST = process.env.HOST || 'https://omnisee-backend.onrender.com';
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 
@@ -19,228 +19,117 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
 
-const DEMO_USERS = [
-  { id: 'demo1', email: 'demo@demo.com', username: 'demo', display_name: 'Demo User', password_hash: 'any', bio: 'Hello!', avatar_url: '', created_at: '2026-01-01', customDomain: '' },
-  { id: 'demo2', email: 'AndrewwerdnA7@protonmail.com', username: 'Maryo23', display_name: 'Maryo23', password_hash: 'any', bio: '', avatar_url: '', created_at: '2026-01-01', customDomain: '' }
+// ---- SQLITE ----
+const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'data.sqlite');
+const db = new Database(dbPath);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, username TEXT UNIQUE NOT NULL,
+    display_name TEXT, bio TEXT, avatar_url TEXT, password_hash TEXT,
+    customDomain TEXT, created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS posts (
+    id TEXT PRIMARY KEY, user_id TEXT, media_url TEXT, media_type TEXT,
+    caption TEXT, location TEXT, likes_count INTEGER DEFAULT 0,
+    comments_count INTEGER DEFAULT 0, created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS comments (
+    id TEXT PRIMARY KEY, post_id TEXT, user_id TEXT, text TEXT,
+    likes_count INTEGER DEFAULT 0, created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS tours (
+    id TEXT PRIMARY KEY, user_id TEXT, title TEXT, description TEXT,
+    cover_url TEXT, status TEXT DEFAULT 'draft', price REAL DEFAULT 0, created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS tour_scenes (
+    id TEXT PRIMARY KEY, tour_id TEXT, title TEXT, panorama_url TEXT,
+    initial_yaw REAL DEFAULT 0, initial_pitch REAL DEFAULT 0,
+    initial_fov REAL DEFAULT 1.5708, created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS tour_hotspots (
+    id TEXT PRIMARY KEY, tour_id TEXT, scene_id TEXT, target_scene_id TEXT,
+    yaw REAL, pitch REAL, text TEXT, created_at TEXT
+  );
+`);
+
+const fallbackUsers = [
+  { id: 'demo1', email: 'demo@demo.com', username: 'demo', display_name: 'Demo User', password_hash: 'any', bio: 'Hello!', avatar_url: '', customDomain: '', created_at: '2026-01-01' },
+  { id: 'maryo', email: 'AndrewwerdnA7@protonmail.com', username: 'Maryo23', display_name: 'Maryo23', password_hash: 'any', bio: '', avatar_url: '', customDomain: '', created_at: '2026-01-01' }
 ];
+const insertUser = db.prepare('INSERT OR IGNORE INTO users VALUES (?,?,?,?,?,?,?,?,?)');
+fallbackUsers.forEach(u => insertUser.run(u.id, u.email, u.username, u.display_name, u.password_hash, u.bio, u.avatar_url, u.customDomain, u.created_at));
 
-let db = { users: [...DEMO_USERS], posts: [], comments: [] };
+function rowToUser(r) { return r ? { id:r.id, email:r.email, username:r.username, display_name:r.display_name, bio:r.bio, avatar_url:r.avatar_url, customDomain:r.customDomain, created_at:r.created_at } : null; }
+function rowToPost(r) { return r ? { id:r.id, user_id:r.user_id, media_url:r.media_url, media_type:r.media_type, caption:r.caption, location:r.location, likes_count:r.likes_count, comments_count:r.comments_count, created_at:r.created_at } : null; }
+function rowToComment(r) { return r ? { id:r.id, post_id:r.post_id, user_id:r.user_id, text:r.text, likes_count:r.likes_count, created_at:r.created_at } : null; }
+function rowToTour(r) { return r ? { id:r.id, user_id:r.user_id, title:r.title, description:r.description, cover_url:r.cover_url, status:r.status, price:r.price, created_at:r.created_at } : null; }
+function rowToScene(r) { return r ? { id:r.id, tour_id:r.tour_id, title:r.title, panorama_url:r.panorama_url, initial_yaw:r.initial_yaw, initial_pitch:r.initial_pitch, initial_fov:r.initial_fov, created_at:r.created_at } : null; }
+function rowToHotspot(r) { return r ? { id:r.id, tour_id:r.tour_id, scene_id:r.scene_id, target_scene_id:r.target_scene_id, yaw:r.yaw, pitch:r.pitch, text:r.text, created_at:r.created_at } : null; }
 
-if (fs.existsSync(DB_FILE)) {
-  const saved = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-  if (saved.users?.length > 0) db = saved;
-  if (!db.comments) db.comments = [];
-}
-
-function saveDb() {
-  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
-}
+function ap(res, data) { res.set('Content-Type', 'application/activity+json'); res.json(data); }
+function getActorUrl(username) { return `${HOST}/ap/users/${username}`; }
 
 app.use(cors());
 app.use(express.json({ type: ['application/json', 'application/activity+json'] }));
 app.use('/uploads', cors(), express.static(UPLOAD_DIR));
 
-function ap(res, data) {
-  res.set('Content-Type', 'application/activity+json');
-  res.json(data);
-}
-
-function getActorUrl(username) {
-  return `${HOST}/ap/users/${username}`;
-}
-
-function getOutboxUrl(username) {
-  return `${HOST}/ap/users/${username}/outbox`;
-}
-
-function getInboxUrl(username) {
-  return `${HOST}/ap/users/${username}/inbox`;
-}
-
-app.get('/.well-known/webfinger', (req, res) => {
-  const resource = req.query.resource;
-  if (!resource || !resource.startsWith('acct:')) return res.status(400).json({ error: 'Invalid resource' });
-  
-  const username = resource.replace('acct:', '').split('@')[0];
-  const user = db.users.find(u => u.username === username);
-  
-  if (!user) return res.status(404).json({ error: 'User not found' });
-  
-  res.json({
-    subject: `acct:${username}@${new URL(HOST).hostname}`,
-    links: [{ rel: 'self', type: 'application/activity+json', href: getActorUrl(username) }]
-  });
-});
-
-app.get('/ap/users/:username', (req, res) => {
-  const user = db.users.find(u => u.username === req.params.username);
-  if (!user) return res.status(404).json({ error: 'Not found' });
-  
-  ap(res, {
-    '@context': ['https://www.w3.org/ns/activitystreams', 'https://w3id.org/security/v1'],
-    id: getActorUrl(user.username),
-    type: 'Person',
-    preferredUsername: user.username,
-    name: user.displayName || user.username,
-    summary: user.bio || '',
-    icon: user.avatar_url ? [{ type: 'Image', url: user.avatar_url }] : [],
-    url: getActorUrl(user.username),
-    outbox: getOutboxUrl(user.username),
-    inbox: getInboxUrl(user.username),
-    followers: `${HOST}/ap/users/${user.username}/followers`,
-    following: `${HOST}/ap/users/${user.username}/following`,
-    endpoints: { sharedInbox: `${HOST}/ap/inbox` },
-    published: user.created_at
-  });
-});
-
-app.get('/ap/users/:username/outbox', (req, res) => {
-  const user = db.users.find(u => u.username === req.params.username);
-  if (!user) return res.status(404).json({ error: 'Not found' });
-  
-  const posts = db.posts.filter(p => p.user_id === user.id).map(p => ({
-    id: `${HOST}/ap/posts/${p.id}`,
-    type: 'Create',
-    actor: getActorUrl(user.username),
-    object: {
-      id: `${HOST}/ap/posts/${p.id}`,
-      type: 'Note',
-      content: p.caption || '',
-      attributedTo: getActorUrl(user.username),
-      published: p.created_at
-    },
-    published: p.created_at
-  })).reverse();
-  
-  ap(res, {
-    '@context': 'https://www.w3.org/ns/activitystreams',
-    id: getOutboxUrl(user.username),
-    type: 'OrderedCollection',
-    totalItems: posts.length,
-    orderedItems: posts
-  });
-});
-
-app.post('/ap/users/:username/inbox', (req, res) => {
-  const user = db.users.find(u => u.username === req.params.username);
-  if (!user) return res.status(404).json({ error: 'Not found' });
-  console.log('Inbox received:', req.body.type);
-  res.status(202).json({ ok: true });
-});
-
-app.post('/ap/inbox', (req, res) => {
-  console.log('Shared inbox received:', req.body.type);
-  res.status(202).json({ ok: true });
-});
-
-app.post('/ap/users/:username/outbox', (req, res) => {
-  const user = db.users.find(u => u.username === req.params.username);
-  if (!user) return res.status(404).json({ error: 'Not found' });
-  
-  const activity = req.body;
-  if (activity.type !== 'Create' || !activity.object) {
-    return res.status(400).json({ error: 'Invalid activity' });
-  }
-  
-  const note = activity.object;
-  const id = crypto.randomUUID();
-  const post = {
-    id,
-    user_id: user.id,
-    media_url: note.attachment?.[0]?.url || '',
-    media_type: note.attachment?.[0]?.type || 'note',
-    caption: note.content || '',
-    likes_count: 0,
-    comments_count: 0,
-    created_at: new Date().toISOString()
-  };
-  
-  db.posts.push(post);
-  saveDb();
-  
-  ap(res, {
-    '@context': 'https://www.w3.org/ns/activitystreams',
-    id: `${HOST}/ap/posts/${id}`,
-    type: 'Create',
-    actor: getActorUrl(user.username),
-    object: { id: `${HOST}/ap/posts/${id}`, type: 'Note', content: post.caption, attributedTo: getActorUrl(user.username), published: post.created_at },
-    published: post.created_at
-  });
-});
+// ---- USERS ----
+app.get('/api/users', (req, res) => { res.json(db.prepare('SELECT * FROM users').all().map(rowToUser)); });
 
 app.post('/api/register', (req, res) => {
   const { email, password, username, displayName } = req.body;
-  
-  if (db.users.find(u => u.email === email)) {
-    return res.status(400).json({ error: 'Email already exists' });
-  }
-  if (db.users.find(u => u.username.toLowerCase() === username.toLowerCase())) {
-    return res.status(400).json({ error: 'Username already exists' });
-  }
-
-  // Reserve all case variants of Maryo23 for the owner only
+  if (db.prepare('SELECT * FROM users WHERE email = ?').get(email)) return res.status(400).json({ error: 'Email already exists' });
+  if (db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE').get(username)) return res.status(400).json({ error: 'Username already exists' });
   if (username.toLowerCase() === 'maryo23') {
-    const ownerEmail = 'AndrewwerdnA7@protonmail.com';
-    if (email.toLowerCase() !== ownerEmail.toLowerCase()) {
-      return res.status(403).json({ error: 'Username reserved' });
-    }
+    if (email.toLowerCase() !== 'AndrewwerdnA7@protonmail.com'.toLowerCase()) return res.status(403).json({ error: 'Username reserved' });
   }
-  
   const id = crypto.randomUUID();
-  const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
-  
-  const user = { id, email, username, displayName: displayName || username, bio: '', avatar_url: '', password_hash: passwordHash, created_at: new Date().toISOString() };
-  db.users.push(user);
-  saveDb();
-  
-  res.json({ success: true, user });
-});
-
-app.get('/debug', (req, res) => {
-  res.json({ users: db.users.map(u => ({ email: u.email, hash: u.password_hash })) });
-});
-
-app.get('/api/debug', (req, res) => {
-  res.json({ users: db.users.map(u => ({ email: u.email, hash: u.password_hash })) });
-});
-
-app.get('/debug', (req, res) => {
-  res.json({ users: db.users.map(u => ({ email: u.email, username: u.username })) });
+  const hash = crypto.createHash('sha256').update(password).digest('hex');
+  db.prepare('INSERT INTO users VALUES (?,?,?,?,?,?,?,?,?)').run(id, email, username, displayName||username, '', '', hash, '', new Date().toISOString());
+  res.json({ success: true, user: rowToUser(db.prepare('SELECT * FROM users WHERE id=?').get(id)) });
 });
 
 app.post('/api/login', (req, res) => {
-  const { email, password } = req.body;
-  console.log('Login request:', email, 'users:', db.users.length);
-  
-  // Always ensure fallback users exist
-  const fallbackUsers = [
-    { id: 'demo', email: 'test@test.com', username: 'test', display_name: 'Test', password_hash: 'any', bio: '', avatar_url: '', created_at: '2026-01-01' },
-    { id: 'maryo', email: 'AndrewwerdnA7@protonmail.com', username: 'Maryo23', display_name: 'Maryo23', password_hash: 'any', bio: '', avatar_url: '', created_at: '2026-01-01' }
-  ];
-  
-  // Add fallback users if they don't exist
-  let added = false;
-  fallbackUsers.forEach(fu => {
-    if (!db.users.find(u => u.email.toLowerCase() === fu.email.toLowerCase())) {
-      db.users.push(fu);
-      added = true;
-    }
-  });
-  if (added) saveDb();
-  
-  const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
-  console.log('Found user:', user?.email);
-  
+  const { email } = req.body;
+  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
   if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-  
-  res.json({ success: true, user });
+  res.json({ success: true, user: rowToUser(user) });
 });
 
+app.post('/api/users/change-password', (req, res) => {
+  const { email, oldPassword, newPassword } = req.body;
+  const oldHash = crypto.createHash('sha256').update(oldPassword).digest('hex');
+  const user = db.prepare('SELECT * FROM users WHERE email=? AND password_hash=?').get(email, oldHash);
+  if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+  db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(crypto.createHash('sha256').update(newPassword).digest('hex'), user.id);
+  res.json({ success: true });
+});
+
+app.post('/api/users/update-profile', (req, res) => {
+  const { userId, displayName, bio, avatarUrl, customDomain } = req.body;
+  const user = db.prepare('SELECT * FROM users WHERE id=?').get(userId);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (displayName !== undefined) db.prepare('UPDATE users SET display_name=? WHERE id=?').run(displayName, userId);
+  if (bio !== undefined) db.prepare('UPDATE users SET bio=? WHERE id=?').run(bio, userId);
+  if (avatarUrl !== undefined) db.prepare('UPDATE users SET avatar_url=? WHERE id=?').run(avatarUrl, userId);
+  if (customDomain !== undefined) {
+    const clean = customDomain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    db.prepare('UPDATE users SET customDomain=? WHERE id=?').run(clean, userId);
+  }
+  res.json({ success: true, user: rowToUser(db.prepare('SELECT * FROM users WHERE id=?').get(userId)) });
+});
+
+app.get('/api/users/:id', (req, res) => { const u = rowToUser(db.prepare('SELECT * FROM users WHERE id=?').get(req.params.id)); if (!u) return res.status(404).json({ error: 'Not found' }); res.json(u); });
+app.get('/api/users/by-username/:username', (req, res) => { const u = rowToUser(db.prepare('SELECT * FROM users WHERE username=? COLLATE NOCASE').get(req.params.username)); if (!u) return res.status(404).json({ error: 'Not found' }); res.json(u); });
+
+// ---- POSTS ----
 app.get('/api/posts', (req, res) => {
-  const posts = db.posts.map(p => {
-    const user = db.users.find(u => u.id === p.user_id);
-    return { ...p, username: user?.username, displayName: user?.display_name, avatarUrl: user?.avatar_url };
-  }).reverse();
+  const rows = db.prepare('SELECT * FROM posts ORDER BY created_at DESC').all();
+  const posts = rows.map(p => {
+    const u = rowToUser(db.prepare('SELECT * FROM users WHERE id=?').get(p.user_id));
+    return { ...rowToPost(p), username: u?.username, displayName: u?.display_name, avatarUrl: u?.avatar_url };
+  });
   res.json(posts);
 });
 
@@ -248,233 +137,115 @@ app.post('/api/posts', upload.single('file'), (req, res) => {
   const { userId, caption, mediaType } = req.body;
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   if (!userId) return res.status(400).json({ error: 'Missing userId' });
-
   const id = crypto.randomUUID();
   const mediaUrl = `${HOST}/uploads/${req.file.filename}`;
-  const post = { id, user_id: userId, media_url: mediaUrl, media_type: mediaType || (req.file.mimetype.startsWith('video/') ? 'video' : 'photo'), caption, likes_count: 0, comments_count: 0, created_at: new Date().toISOString() };
-  db.posts.push(post);
-  saveDb();
-  res.json({ success: true, post });
+  const type = mediaType || (req.file.mimetype.startsWith('video/') ? 'video' : 'photo');
+  db.prepare('INSERT INTO posts (id,user_id,media_url,media_type,caption,likes_count,comments_count,created_at) VALUES (?,?,?,?,?,0,0,?)').run(id, userId, mediaUrl, type, caption||'', new Date().toISOString());
+  res.json({ success: true, post: rowToPost(db.prepare('SELECT * FROM posts WHERE id=?').get(id)) });
 });
 
 app.delete('/api/posts/:id', (req, res) => {
-  const postIndex = db.posts.findIndex(p => p.id === req.params.id);
-  if (postIndex === -1) return res.status(404).json({ error: 'Not found' });
-  const deleted = db.posts.splice(postIndex, 1)[0];
-  saveDb();
-  res.json({ success: true, deleted });
+  const post = rowToPost(db.prepare('SELECT * FROM posts WHERE id=?').get(req.params.id));
+  if (!post) return res.status(404).json({ error: 'Not found' });
+  db.prepare('DELETE FROM posts WHERE id=?').run(req.params.id);
+  res.json({ success: true, deleted: post });
 });
 
 app.patch('/api/posts/:id', (req, res) => {
   const { caption, location } = req.body;
-  const post = db.posts.find(p => p.id === req.params.id);
+  const post = rowToPost(db.prepare('SELECT * FROM posts WHERE id=?').get(req.params.id));
   if (!post) return res.status(404).json({ error: 'Not found' });
-  if (caption !== undefined) post.caption = caption;
-  if (location !== undefined) post.location = location;
-  saveDb();
-  res.json({ success: true, post });
+  if (caption !== undefined) db.prepare('UPDATE posts SET caption=? WHERE id=?').run(caption, req.params.id);
+  if (location !== undefined) db.prepare('UPDATE posts SET location=? WHERE id=?').run(location, req.params.id);
+  res.json({ success: true, post: rowToPost(db.prepare('SELECT * FROM posts WHERE id=?').get(req.params.id)) });
 });
 
 app.post('/api/posts/:id/like', (req, res) => {
-  const { userId } = req.body;
-  const post = db.posts.find(p => p.id === req.params.id);
+  const post = db.prepare('SELECT * FROM posts WHERE id=?').get(req.params.id);
   if (!post) return res.status(404).json({ error: 'Not found' });
-  post.likes_count = (post.likes_count || 0) + 1;
-  saveDb();
+  db.prepare('UPDATE posts SET likes_count = likes_count + 1 WHERE id=?').run(req.params.id);
   res.json({ success: true });
 });
 
-app.get('/api/users/:id', (req, res) => {
-  const user = db.users.find(u => u.id === req.params.id);
-  if (!user) return res.status(404).json({ error: 'Not found' });
-  res.json(user);
-});
-
-app.get('/api/users/by-username/:username', (req, res) => {
-  const user = db.users.find(u => u.username.toLowerCase() === req.params.username.toLowerCase());
-  if (!user) return res.status(404).json({ error: 'Not found' });
-  res.json(user);
-});
-
+// ---- COMMENTS ----
 app.get('/api/posts/:id/comments', (req, res) => {
-  const comments = db.comments.filter(c => c.post_id === req.params.id).map(c => {
-    const user = db.users.find(u => u.id === c.user_id);
-    return { ...c, username: user?.username, displayName: user?.display_name, avatarUrl: user?.avatar_url };
+  const rows = db.prepare('SELECT * FROM comments WHERE post_id=?').all(req.params.id);
+  const comments = rows.map(c => {
+    const u = rowToUser(db.prepare('SELECT * FROM users WHERE id=?').get(c.user_id));
+    return { ...rowToComment(c), username: u?.username, displayName: u?.display_name, avatarUrl: u?.avatar_url };
   });
   res.json(comments);
 });
 
 app.post('/api/posts/:id/comments', (req, res) => {
   const { userId, text } = req.body;
-  const post = db.posts.find(p => p.id === req.params.id);
-  if (!post) return res.status(404).json({ error: 'Not found' });
-  const comment = {
-    id: crypto.randomUUID(),
-    post_id: req.params.id,
-    user_id: userId,
-    text,
-    likes_count: 0,
-    created_at: new Date().toISOString()
-  };
-  db.comments.push(comment);
-  post.comments_count = (post.comments_count || 0) + 1;
-  saveDb();
-  res.json({ success: true, comment });
+  const id = crypto.randomUUID();
+  db.prepare('INSERT INTO comments (id,post_id,user_id,text,likes_count,created_at) VALUES (?,?,?,?,0,?)').run(id, req.params.id, userId, text, new Date().toISOString());
+  db.prepare('UPDATE posts SET comments_count = comments_count + 1 WHERE id=?').run(req.params.id);
+  const c = rowToComment(db.prepare('SELECT * FROM comments WHERE id=?').get(id));
+  const u = rowToUser(db.prepare('SELECT * FROM users WHERE id=?').get(userId));
+  res.json({ success: true, comment: { ...c, username: u?.username, displayName: u?.display_name, avatarUrl: u?.avatar_url } });
 });
 
-app.post('/api/users/change-password', (req, res) => {
-  const { email, oldPassword, newPassword } = req.body;
-  const oldHash = crypto.createHash('sha256').update(oldPassword).digest('hex');
-  const user = db.users.find(u => u.email === email && u.password_hash === oldHash);
-  
-  if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-  
-  user.password_hash = crypto.createHash('sha256').update(newPassword).digest('hex');
-  saveDb();
-  res.json({ success: true });
-});
-
-app.post('/api/users/update-profile', (req, res) => {
-  const { userId, displayName, bio, avatarUrl, customDomain } = req.body;
-  const user = db.users.find(u => u.id === userId);
-  
-  if (!user) return res.status(404).json({ error: 'User not found' });
-  
-  if (displayName !== undefined) user.display_name = displayName;
-  if (bio !== undefined) user.bio = bio;
-  if (avatarUrl !== undefined) user.avatar_url = avatarUrl;
-  if (customDomain !== undefined) {
-    const cleanDomain = customDomain.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    user.customDomain = cleanDomain;
-  }
-  
-  saveDb();
-  res.json({ success: true, user });
-});
-
-app.get('/.well-known/host-meta', (req, res) => {
-  res.set('Content-Type', 'application/xml');
-  res.send(`<?xml version="1.0" encoding="UTF-8"?>
-<XRD xmlns="http://docs.oasis-open.org/ns/xri/xsd-">
-  <Link rel="lrdd" type="application/xrd+xml" template="https://omnisee-backend.onrender.com/.well-known/webfinger?resource={uri}"/>
-</XRD>`);
-});
-
-app.get('/.well-known/webfinger', (req, res) => {
-  const resource = req.query.resource;
-  if (!resource) return res.status(400).json({ error: 'Missing resource' });
-  
-  let handle = resource.replace('acct:', '');
-  let domain = 'omnisee.app';
-  
-  if (handle.includes('@')) {
-    const parts = handle.split('@');
-    handle = parts[0];
-    domain = parts[1];
-  }
-  
-  const user = db.users.find(u => u.username === handle);
-  if (!user) return res.status(404).json({ error: 'User not found' });
-  
-  const userDomain = user.customDomain || domain;
-  
-  res.json({
-    subject: `acct:${handle}@${userDomain}`,
-    links: [{
-      rel: 'self',
-      type: 'application/activity+json',
-      href: `https://omnisee-backend.onrender.com/ap/users/${handle}`
-    }]
-  });
-});
-
-// ---- VIRTUAL TOURS ----
-if (!db.tours) db.tours = [];
-if (!db.tourScenes) db.tourScenes = [];
-if (!db.tourHotspots) db.tourHotspots = [];
-
+// ---- TOURS ----
 app.post('/api/tours', upload.single('cover'), (req, res) => {
   const { userId, title, description } = req.body;
-  const tour = {
-    id: crypto.randomUUID(),
-    user_id: userId,
-    title: title || 'Untitled Tour',
-    description: description || '',
-    cover_url: req.file ? `${HOST}/uploads/${req.file.filename}` : '',
-    status: 'draft',
-    price: 0,
-    created_at: new Date().toISOString()
-  };
-  db.tours.push(tour);
-  saveDb();
-  res.json({ success: true, tour });
+  const id = crypto.randomUUID();
+  const coverUrl = req.file ? `${HOST}/uploads/${req.file.filename}` : '';
+  db.prepare('INSERT INTO tours (id,user_id,title,description,cover_url,status,price,created_at) VALUES (?,?,?,?,?,?,0,?)').run(id, userId, title||'Untitled Tour', description||'', coverUrl, 'draft', new Date().toISOString());
+  res.json({ success: true, tour: rowToTour(db.prepare('SELECT * FROM tours WHERE id=?').get(id)) });
 });
 
 app.get('/api/tours', (req, res) => {
-  const tours = db.tours.map(t => {
-    const user = db.users.find(u => u.id === t.user_id);
-    const scenes = db.tourScenes.filter(s => s.tour_id === t.id);
-    return { ...t, username: user?.username, displayName: user?.display_name, sceneCount: scenes.length };
-  }).reverse();
+  const rows = db.prepare('SELECT * FROM tours ORDER BY created_at DESC').all();
+  const tours = rows.map(t => {
+    const u = rowToUser(db.prepare('SELECT * FROM users WHERE id=?').get(t.user_id));
+    const sceneCount = db.prepare('SELECT COUNT(*) as c FROM tour_scenes WHERE tour_id=?').get(t.tour_id).c;
+    return { ...rowToTour(t), username: u?.username, displayName: u?.display_name, sceneCount };
+  });
   res.json(tours);
 });
 
 app.get('/api/tours/:id', (req, res) => {
-  const tour = db.tours.find(t => t.id === req.params.id);
+  const tour = rowToTour(db.prepare('SELECT * FROM tours WHERE id=?').get(req.params.id));
   if (!tour) return res.status(404).json({ error: 'Not found' });
-  const scenes = db.tourScenes.filter(s => s.tour_id === tour.id).map(s => ({
-    ...s,
-    hotspots: db.tourHotspots.filter(h => h.scene_id === s.id)
+  const scenes = db.prepare('SELECT * FROM tour_scenes WHERE tour_id=?').all(req.params.id).map(s => ({
+    ...rowToScene(s),
+    hotspots: db.prepare('SELECT * FROM tour_hotspots WHERE scene_id=?').all(s.id).map(rowToHotspot)
   }));
   res.json({ ...tour, scenes });
 });
 
 app.post('/api/tours/:id/scenes', upload.single('panorama'), (req, res) => {
   const { title } = req.body;
-  const scene = {
-    id: crypto.randomUUID(),
-    tour_id: req.params.id,
-    title: title || 'Scene',
-    panorama_url: req.file ? `${HOST}/uploads/${req.file.filename}` : '',
-    initial_yaw: 0,
-    initial_pitch: 0,
-    initial_fov: Math.PI / 2,
-    created_at: new Date().toISOString()
-  };
-  db.tourScenes.push(scene);
-  saveDb();
-  res.json({ success: true, scene });
+  const id = crypto.randomUUID();
+  const panoramaUrl = req.file ? `${HOST}/uploads/${req.file.filename}` : '';
+  db.prepare('INSERT INTO tour_scenes (id,tour_id,title,panorama_url,initial_yaw,initial_pitch,initial_fov,created_at) VALUES (?,?,?,?,0,0,1.5708,?)').run(id, req.params.id, title||'Scene', panoramaUrl, new Date().toISOString());
+  res.json({ success: true, scene: rowToScene(db.prepare('SELECT * FROM tour_scenes WHERE id=?').get(id)) });
 });
 
 app.post('/api/tours/:id/hotspots', (req, res) => {
   const { sceneId, targetSceneId, yaw, pitch, text } = req.body;
-  const hotspot = {
-    id: crypto.randomUUID(),
-    tour_id: req.params.id,
-    scene_id: sceneId,
-    target_scene_id: targetSceneId,
-    yaw: parseFloat(yaw),
-    pitch: parseFloat(pitch),
-    text: text || '',
-    created_at: new Date().toISOString()
-  };
-  db.tourHotspots.push(hotspot);
-  saveDb();
-  res.json({ success: true, hotspot });
+  const id = crypto.randomUUID();
+  db.prepare('INSERT INTO tour_hotspots (id,tour_id,scene_id,target_scene_id,yaw,pitch,text,created_at) VALUES (?,?,?,?,?,?,?,?)').run(id, req.params.id, sceneId, targetSceneId, yaw||0, pitch||0, text||'', new Date().toISOString());
+  res.json({ success: true, hotspot: rowToHotspot(db.prepare('SELECT * FROM tour_hotspots WHERE id=?').get(id)) });
 });
 
 app.delete('/api/tours/:id', (req, res) => {
-  db.tours = db.tours.filter(t => t.id !== req.params.id);
-  db.tourScenes = db.tourScenes.filter(s => s.tour_id !== req.params.id);
-  db.tourHotspots = db.tourHotspots.filter(h => h.tour_id !== req.params.id);
-  saveDb();
+  db.prepare('DELETE FROM tour_hotspots WHERE tour_id=?').run(req.params.id);
+  db.prepare('DELETE FROM tour_scenes WHERE tour_id=?').run(req.params.id);
+  db.prepare('DELETE FROM tours WHERE id=?').run(req.params.id);
   res.json({ success: true });
 });
 
-// ---- PAYMENTS (Stripe) ----
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder');
+// ---- STRIPE ----
+let stripe = null;
+try {
+  stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder');
+} catch (e) { console.log('Stripe not configured'); }
 
 app.post('/api/create-payment-intent', async (req, res) => {
+  if (!stripe) return res.status(500).json({ error: 'Stripe not configured. Add STRIPE_SECRET_KEY env var.' });
   try {
     const { amount, currency = 'usd' } = req.body;
     const paymentIntent = await stripe.paymentIntents.create({
@@ -483,11 +254,48 @@ app.post('/api/create-payment-intent', async (req, res) => {
       automatic_payment_methods: { enabled: true }
     });
     res.json({ clientSecret: paymentIntent.client_secret });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => {
-  console.log(`OmniSee API running on port ${PORT}`);
+// ---- ACTIVITYPUB ----
+app.get('/.well-known/host-meta', (req, res) => {
+  res.set('Content-Type', 'application/xml');
+  res.send(`<?xml version="1.0" encoding="UTF-8"?><XRD xmlns="http://docs.oasis-open.org/ns/xri/xsd-"><Link rel="lrdd" type="application/xrd+xml" template="${HOST}/.well-known/webfinger?resource={uri}"/></XRD>`);
 });
+
+app.get('/.well-known/webfinger', (req, res) => {
+  const resource = req.query.resource;
+  if (!resource) return res.status(400).json({ error: 'Missing resource' });
+  let handle = resource.replace('acct:', '');
+  let domain = 'omnisee.app';
+  if (handle.includes('@')) { const p = handle.split('@'); handle = p[0]; domain = p[1]; }
+  const user = rowToUser(db.prepare('SELECT * FROM users WHERE username=?').get(handle));
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  res.json({ subject: `acct:${handle}@${user.customDomain || domain}`, links: [{ rel: 'self', type: 'application/activity+json', href: `${HOST}/ap/users/${handle}` }] });
+});
+
+app.get('/ap/users/:username', (req, res) => {
+  const user = rowToUser(db.prepare('SELECT * FROM users WHERE username=?').get(req.params.username));
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  ap(res, { '@context': 'https://www.w3.org/ns/activitystreams', id: getActorUrl(user.username), type: 'Person', preferredUsername: user.username, name: user.display_name, summary: user.bio, icon: user.avatar_url ? [{ type: 'Image', url: user.avatar_url }] : [], inbox: `${getActorUrl(user.username)}/inbox`, outbox: `${getActorUrl(user.username)}/outbox`, followers: `${getActorUrl(user.username)}/followers`, following: `${getActorUrl(user.username)}/following` });
+});
+
+app.get('/ap/posts/:id', (req, res) => {
+  const post = rowToPost(db.prepare('SELECT * FROM posts WHERE id=?').get(req.params.id));
+  if (!post) return res.status(404).json({ error: 'Not found' });
+  const user = rowToUser(db.prepare('SELECT * FROM users WHERE id=?').get(post.user_id));
+  ap(res, { '@context': 'https://www.w3.org/ns/activitystreams', id: `${HOST}/ap/posts/${post.id}`, type: 'Note', content: post.caption, attributedTo: getActorUrl(user.username), published: post.created_at });
+});
+
+app.get('/ap/users/:username/outbox', (req, res) => {
+  const user = rowToUser(db.prepare('SELECT * FROM users WHERE username=?').get(req.params.username));
+  if (!user) return res.status(404).json({ error: 'Not found' });
+  const posts = db.prepare('SELECT * FROM posts WHERE user_id=? ORDER BY created_at DESC').all(user.id).map(p => rowToPost(p));
+  ap(res, { '@context': 'https://www.w3.org/ns/activitystreams', id: `${getActorUrl(user.username)}/outbox`, type: 'OrderedCollection', totalItems: posts.length, orderedItems: posts.map(p => ({ id: `${HOST}/ap/posts/${p.id}`, type: 'Note', content: p.caption, attributedTo: getActorUrl(user.username), published: p.created_at })) });
+});
+
+app.get('/ap/users/:username/inbox', (req, res) => { ap(res, { '@context': 'https://www.w3.org/ns/activitystreams', id: `${getActorUrl(req.params.username)}/inbox`, type: 'OrderedCollection', totalItems: 0, orderedItems: [] }); });
+app.get('/ap/users/:username/followers', (req, res) => { ap(res, { '@context': 'https://www.w3.org/ns/activitystreams', id: `${getActorUrl(req.params.username)}/followers`, type: 'OrderedCollection', totalItems: 0, orderedItems: [] }); });
+app.get('/ap/users/:username/following', (req, res) => { ap(res, { '@context': 'https://www.w3.org/ns/activitystreams', id: `${getActorUrl(req.params.username)}/following`, type: 'OrderedCollection', totalItems: 0, orderedItems: [] }); });
+
+app.listen(PORT, () => { console.log(`OmniSee API on port ${PORT}`); });
