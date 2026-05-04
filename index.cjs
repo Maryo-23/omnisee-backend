@@ -193,7 +193,7 @@ app.post('/api/register', (req, res) => {
   db.users.push(user);
   saveDb();
   
-  res.json({ success: true, user: { id, email, username, displayName: user.displayName } });
+  res.json({ success: true, user });
 });
 
 app.get('/debug', (req, res) => {
