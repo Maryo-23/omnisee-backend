@@ -265,6 +265,16 @@ app.delete('/api/posts/:id', (req, res) => {
   res.json({ success: true, deleted });
 });
 
+app.patch('/api/posts/:id', (req, res) => {
+  const { caption, location } = req.body;
+  const post = db.posts.find(p => p.id === req.params.id);
+  if (!post) return res.status(404).json({ error: 'Not found' });
+  if (caption !== undefined) post.caption = caption;
+  if (location !== undefined) post.location = location;
+  saveDb();
+  res.json({ success: true, post });
+});
+
 app.post('/api/posts/:id/like', (req, res) => {
   const { userId } = req.body;
   const post = db.posts.find(p => p.id === req.params.id);
@@ -376,6 +386,106 @@ app.get('/.well-known/webfinger', (req, res) => {
       href: `https://omnisee-backend.onrender.com/ap/users/${handle}`
     }]
   });
+});
+
+// ---- VIRTUAL TOURS ----
+if (!db.tours) db.tours = [];
+if (!db.tourScenes) db.tourScenes = [];
+if (!db.tourHotspots) db.tourHotspots = [];
+
+app.post('/api/tours', upload.single('cover'), (req, res) => {
+  const { userId, title, description } = req.body;
+  const tour = {
+    id: crypto.randomUUID(),
+    user_id: userId,
+    title: title || 'Untitled Tour',
+    description: description || '',
+    cover_url: req.file ? `${HOST}/uploads/${req.file.filename}` : '',
+    status: 'draft',
+    price: 0,
+    created_at: new Date().toISOString()
+  };
+  db.tours.push(tour);
+  saveDb();
+  res.json({ success: true, tour });
+});
+
+app.get('/api/tours', (req, res) => {
+  const tours = db.tours.map(t => {
+    const user = db.users.find(u => u.id === t.user_id);
+    const scenes = db.tourScenes.filter(s => s.tour_id === t.id);
+    return { ...t, username: user?.username, displayName: user?.display_name, sceneCount: scenes.length };
+  }).reverse();
+  res.json(tours);
+});
+
+app.get('/api/tours/:id', (req, res) => {
+  const tour = db.tours.find(t => t.id === req.params.id);
+  if (!tour) return res.status(404).json({ error: 'Not found' });
+  const scenes = db.tourScenes.filter(s => s.tour_id === tour.id).map(s => ({
+    ...s,
+    hotspots: db.tourHotspots.filter(h => h.scene_id === s.id)
+  }));
+  res.json({ ...tour, scenes });
+});
+
+app.post('/api/tours/:id/scenes', upload.single('panorama'), (req, res) => {
+  const { title } = req.body;
+  const scene = {
+    id: crypto.randomUUID(),
+    tour_id: req.params.id,
+    title: title || 'Scene',
+    panorama_url: req.file ? `${HOST}/uploads/${req.file.filename}` : '',
+    initial_yaw: 0,
+    initial_pitch: 0,
+    initial_fov: Math.PI / 2,
+    created_at: new Date().toISOString()
+  };
+  db.tourScenes.push(scene);
+  saveDb();
+  res.json({ success: true, scene });
+});
+
+app.post('/api/tours/:id/hotspots', (req, res) => {
+  const { sceneId, targetSceneId, yaw, pitch, text } = req.body;
+  const hotspot = {
+    id: crypto.randomUUID(),
+    tour_id: req.params.id,
+    scene_id: sceneId,
+    target_scene_id: targetSceneId,
+    yaw: parseFloat(yaw),
+    pitch: parseFloat(pitch),
+    text: text || '',
+    created_at: new Date().toISOString()
+  };
+  db.tourHotspots.push(hotspot);
+  saveDb();
+  res.json({ success: true, hotspot });
+});
+
+app.delete('/api/tours/:id', (req, res) => {
+  db.tours = db.tours.filter(t => t.id !== req.params.id);
+  db.tourScenes = db.tourScenes.filter(s => s.tour_id !== req.params.id);
+  db.tourHotspots = db.tourHotspots.filter(h => h.tour_id !== req.params.id);
+  saveDb();
+  res.json({ success: true });
+});
+
+// ---- PAYMENTS (Stripe) ----
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder');
+
+app.post('/api/create-payment-intent', async (req, res) => {
+  try {
+    const { amount, currency = 'usd' } = req.body;
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: Math.round(amount * 100),
+      currency,
+      automatic_payment_methods: { enabled: true }
+    });
+    res.json({ clientSecret: paymentIntent.client_secret });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.listen(PORT, () => {
