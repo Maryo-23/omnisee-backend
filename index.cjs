@@ -134,13 +134,13 @@ app.get('/api/posts', (req, res) => {
 });
 
 app.post('/api/posts', upload.single('file'), (req, res) => {
-  const { userId, caption, mediaType } = req.body;
+  const { userId, caption, location, mediaType } = req.body;
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   if (!userId) return res.status(400).json({ error: 'Missing userId' });
   const id = crypto.randomUUID();
   const mediaUrl = `${HOST}/uploads/${req.file.filename}`;
   const type = mediaType || (req.file.mimetype.startsWith('video/') ? 'video' : 'photo');
-  db.prepare('INSERT INTO posts (id,user_id,media_url,media_type,caption,likes_count,comments_count,created_at) VALUES (?,?,?,?,?,0,0,?)').run(id, userId, mediaUrl, type, caption||'', new Date().toISOString());
+  db.prepare('INSERT INTO posts (id,user_id,media_url,media_type,caption,location,likes_count,comments_count,created_at) VALUES (?,?,?,?,?,?,0,0,?)').run(id, userId, mediaUrl, type, caption||'', location||'', new Date().toISOString());
   res.json({ success: true, post: rowToPost(db.prepare('SELECT * FROM posts WHERE id=?').get(id)) });
 });
 
